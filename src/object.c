@@ -182,7 +182,9 @@ _dispatch_dealloc(dispatch_object_t dou)
 	if (func && ctxt) {
 		dispatch_async_f(tq, ctxt, func);
 	}
-	_dispatch_release(tq);
+  if (tq) {
+	  _dispatch_release(tq);
+  }
 }
 
 void

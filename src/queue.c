@@ -43,6 +43,9 @@ static void _dispatch_queue_cleanup(void *ctxt);
 static inline void _dispatch_queue_wakeup_global2(dispatch_queue_t dq,
 		unsigned int n);
 static inline void _dispatch_queue_wakeup_global(dispatch_queue_t dq);
+static inline void _dispatch_queue_wakeup_sthread2(dispatch_queue_t dq,
+		unsigned int n);
+static inline void _dispatch_queue_wakeup_sthread(dispatch_queue_t dq);
 static _dispatch_thread_semaphore_t _dispatch_queue_drain(dispatch_queue_t dq);
 static inline _dispatch_thread_semaphore_t
 		_dispatch_queue_drain_one_barrier_sync(dispatch_queue_t dq);
@@ -742,6 +745,7 @@ _dispatch_queue_dispose(dispatch_queue_t dq)
 
 	dispatch_queue_t dqsq = dispatch_atomic_xchg2o(dq, dq_specific_q,
 			(dispatch_queue_t)0x200);
+
 	if (dqsq) {
 		_dispatch_release(dqsq);
 	}
@@ -1134,6 +1138,10 @@ _dispatch_continuation_alloc_from_heap(void)
 	       _dispatch_ccache_zone, 1, ROUND_UP_TO_CACHELINE_SIZE(sizeof(*dc)))))) {
 		sleep(1);
 	}
+
+  if (dc) {
+    __DISPATCH_CATCH_CORRUPTION(dc);
+  }
 
 	return dc;
 }
@@ -1716,7 +1724,7 @@ dispatch_barrier_sync_f(dispatch_queue_t dq, void *ctxt,
 		// the slow case
 		return _dispatch_barrier_sync_f_slow(dq, ctxt, func);
 	}
-	if (slowpath(dq->do_targetq->do_targetq)) {
+	if (slowpath(dq->do_targetq) && slowpath(dq->do_targetq->do_targetq)) {
 		return _dispatch_barrier_sync_f_recurse(dq, ctxt, func);
 	}
 	_dispatch_barrier_sync_f_invoke(dq, ctxt, func);
@@ -1839,10 +1847,25 @@ _dispatch_sync_f2(dispatch_queue_t dq, void *ctxt, dispatch_function_t func)
 	_dispatch_sync_f_invoke(dq, ctxt, func);
 }
 
+DISPATCH_INLINE
+void
+_dispatch_sthread_dummy_func(void *dummy)
+{
+}
+
 DISPATCH_NOINLINE
 void
 dispatch_sync_f(dispatch_queue_t dq, void *ctxt, dispatch_function_t func)
 {
+  if ((dx_type(dq) == DISPATCH_QUEUE_STHREAD_TYPE) &&
+      (func != _dispatch_sthread_dummy_func)) {
+    // dispatch_sync() was dipatching the func on the MAIN_Q;
+    // the below code forces it to dispatch on the static-thread
+    dispatch_barrier_async_f(dq, ctxt, func);
+    dispatch_sync_f(dq, (void*)0x12345678DEADBEEF, _dispatch_sthread_dummy_func);
+    return;
+  }
+
 	if (fastpath(dq->dq_width == 1)) {
 		return dispatch_barrier_sync_f(dq, ctxt, func);
 	}
@@ -1996,6 +2019,10 @@ _dispatch_queue_push_list_slow(dispatch_queue_t dq,
 		dq->dq_items_head = obj;
 		return _dispatch_queue_wakeup_global2(dq, n);
 	}
+  else if (dx_type(dq) == DISPATCH_QUEUE_STHREAD_TYPE) {
+		dq->dq_items_head = obj;
+		return _dispatch_queue_wakeup_sthread2(dq, n);
+  }
 	_dispatch_queue_push_list_slow2(dq, obj);
 }
 
@@ -2004,10 +2031,19 @@ void
 _dispatch_queue_push_slow(dispatch_queue_t dq,
 		struct dispatch_object_s *obj)
 {
+  //FIXME - This is to debug
+  //RIFT-3671 - Occasionally seeing the below crash when running the collapsed mode ethsim setup
+  if ((void*)dq == (void*)obj)
+	  _dispatch_abort(__LINE__, (long)1);
+
 	if (dx_type(dq) == DISPATCH_QUEUE_GLOBAL_TYPE) {
 		dq->dq_items_head = obj;
 		return _dispatch_queue_wakeup_global(dq);
 	}
+  else if (dx_type(dq) == DISPATCH_QUEUE_STHREAD_TYPE) {
+		dq->dq_items_head = obj;
+		return _dispatch_queue_wakeup_sthread(dq);
+  }
 	_dispatch_queue_push_list_slow2(dq, obj);
 }
 
@@ -2590,8 +2626,9 @@ _dispatch_worker_thread(void *context)
 
 	return NULL;
 }
+#endif
 
-int
+static int
 _dispatch_pthread_sigmask(int how, sigset_t *set, sigset_t *oset)
 {
 	int r;
@@ -2619,7 +2656,6 @@ _dispatch_pthread_sigmask(int how, sigset_t *set, sigset_t *oset)
 
 	return pthread_sigmask(how, set, oset);
 }
-#endif
 
 #pragma mark -
 #pragma mark dispatch_main_queue
@@ -3158,4 +3194,363 @@ _dispatch_mgr_thread(dispatch_queue_t dq DISPATCH_UNUSED)
 	// never returns, so burn bridges behind us & clear stack 2k ahead
 	_dispatch_clear_stack(2048);
 	_dispatch_mgr_invoke();
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// RAJR - DISPATCH_STHREAD IMPLEMENTATION
+////////////////////////////////////////////////////////////////////////////////
+
+struct dispatch_sthread_queue_context_s {
+	union {
+		struct {
+			unsigned int volatile dgq_pending;
+			int dgq_wq_priority, dgq_wq_options;
+      struct dispatch_semaphore_s dgq_sthread_mediator_data;
+			dispatch_semaphore_t dgq_sthread_mediator;
+		};
+		char _dgq_pad[DISPATCH_CACHELINE_SIZE];
+	};
+};
+DISPATCH_DECL(dispatch_sthread_queue_context);
+
+struct dispatch_sthread_queue_s {
+  dispatch_queue_t dq;
+  pthread_t pthr;
+  TAILQ_ENTRY(dispatch_sthread_queue_s) entry;
+};
+DISPATCH_DECL(dispatch_sthread_queue);
+
+struct dispatch_sthread_s {
+  unsigned int _count;
+  TAILQ_HEAD(tailhead,dispatch_sthread_queue_s) _tq;
+} _dispatch_sthread = { 0, TAILQ_HEAD_INITIALIZER(_dispatch_sthread._tq) };
+DISPATCH_DECL(dispatch_sthread);
+static pthread_mutex_t _dispatch_sthread_lock = {};
+#define STHREAD_LOCK() {     \
+  int r = pthread_mutex_lock(&_dispatch_sthread_lock); \
+  if (r) { abort(); }       \
+}
+#define STHREAD_UNLOCK() {     \
+  int r = pthread_mutex_unlock(&_dispatch_sthread_lock); \
+  if (r) { abort(); }       \
+}
+
+
+
+DISPATCH_NOINLINE
+static void
+_dispatch_queue_wakeup_sthread_slow(dispatch_queue_t dq, unsigned int n)
+{
+	struct dispatch_sthread_queue_context_s *qc =
+			(struct dispatch_sthread_queue_context_s *)dq->do_ctxt;
+
+	dispatch_debug_queue(dq, __func__);
+
+	if (dispatch_semaphore_signal(qc->dgq_sthread_mediator)) {
+		return;
+	}
+}
+
+static inline void
+_dispatch_queue_wakeup_sthread2(dispatch_queue_t dq, unsigned int n)
+{
+	if (!dq->dq_items_tail) {
+		return;
+	}
+	return 	_dispatch_queue_wakeup_sthread_slow(dq, n);
+}
+
+static inline void
+_dispatch_queue_wakeup_sthread(dispatch_queue_t dq)
+{
+	return _dispatch_queue_wakeup_sthread2(dq, 1);
+}
+
+bool
+_dispatch_queue_probe_sthread(dispatch_queue_t dq)
+{
+	_dispatch_queue_wakeup_sthread2(dq, 1);
+	return false;
+}
+
+// 6618342 Contact the team that owns the Instrument DTrace probe before
+//         renaming this symbol
+void
+_dispatch_queue_dispose_sthread(dispatch_queue_t dq)
+{
+  pthread_t *sthread_pthr = NULL;
+	if (slowpath(dq == _dispatch_queue_get_current())) {
+		DISPATCH_CRASH("Release of a queue by itself");
+	}
+	if (slowpath(dq->dq_items_tail)) {
+		DISPATCH_CRASH("Release of a queue while items are enqueued");
+	}
+  if (dx_type(dq) != DISPATCH_QUEUE_STHREAD_TYPE) {
+		DISPATCH_CRASH("_dispatch_queue_dispose_sthread callded on !DISPATCH_QUEUE_STHREAD_TYPE");
+	}
+
+  //_dispatch_queue_wakeup_sthread(dq);
+  _dispatch_queue_wakeup_sthread_slow(dq, 1);
+
+  sthread_pthr = dispatch_queue_get_specific(dq, "STHREAD_PTHR");
+
+	// trash the tail queue so that use after free will crash
+	dq->dq_items_tail = (struct dispatch_object_s *)0xf6ee;
+
+	dispatch_queue_t dqsq = dispatch_atomic_xchg2o(dq, dq_specific_q, (dispatch_queue_t)0xf6ee);
+
+	if (dqsq) {
+		_dispatch_release(dqsq);
+	}
+  if (sthread_pthr) {
+    pthread_cancel(*sthread_pthr);
+  }
+
+  STHREAD_LOCK()
+  dispatch_sthread_queue_t _s_dq;
+  TAILQ_FOREACH(_s_dq, &_dispatch_sthread._tq, entry) {
+    if (dq == _s_dq->dq) {
+      TAILQ_REMOVE(&_dispatch_sthread._tq, _s_dq,  entry);
+      //_dispatch_sthread._count --;
+      dispatch_atomic_dec2o(&_dispatch_sthread, _count);
+      free(_s_dq);
+      break;
+    }
+  }
+  STHREAD_UNLOCK()
+}
+
+static struct dispatch_object_s *
+_dispatch_sthread_queue_drain_one(dispatch_queue_t dq)
+{
+	struct dispatch_object_s *head, *next;
+
+	head = dq->dq_items_head;
+
+	if (slowpath(head == NULL)) {
+		_dispatch_debug("no work on sthread work queue");
+		return NULL;
+	}
+
+	// Restore the head pointer to a sane value before returning.
+	// If 'next' is NULL, then this item _might_ be the last item.
+	next = fastpath(head->do_next);
+
+	if (slowpath(!next)) {
+		dq->dq_items_head = NULL;
+
+		if (dispatch_atomic_cmpxchg2o(dq, dq_items_tail, head, NULL)) {
+			// both head and tail are NULL now
+			goto out;
+		}
+
+		// There must be a next item now. This thread won't wait long.
+		while (!(next = head->do_next)) {
+			_dispatch_hardware_pause();
+		}
+	}
+
+	dq->dq_items_head = next;
+	_dispatch_queue_wakeup_sthread(dq);
+out:
+	return head;
+}
+
+static void
+_dispatch_worker_sthread4(dispatch_queue_t dq)
+{
+	struct dispatch_object_s *item;
+
+	_dispatch_thread_setspecific(dispatch_queue_key, dq);
+
+	while ((item = fastpath(_dispatch_sthread_queue_drain_one(dq)))) {
+		_dispatch_continuation_pop(item);
+	}
+
+	_dispatch_thread_setspecific(dispatch_queue_key, NULL);
+
+	_dispatch_force_cache_cleanup();
+
+}
+
+static void *
+_dispatch_worker_sthread(void *context)
+{
+	dispatch_queue_t dq = (dispatch_queue_t)context;
+	struct dispatch_sthread_queue_context_s *qc = dq->do_ctxt;
+	sigset_t mask;
+	int r;
+
+//	_dispatch_thread_setspecific(dispatch_queue_key, dq);
+
+  printf("_dispatch_worker_sthread(%lu) thread %lu\n\n",dq->dq_serialnum-12, pthread_self()); 
+
+	// workaround tweaks the kernel workqueue does for us
+	r = sigfillset(&mask);
+	(void)dispatch_assume_zero(r);
+	r = _dispatch_pthread_sigmask(SIG_BLOCK, &mask, NULL);
+	(void)dispatch_assume_zero(r);
+
+	while (1) {
+		// we use 65 seconds in case there are any timers that run once a minute
+	  while (dispatch_semaphore_wait(qc->dgq_sthread_mediator,
+              dispatch_time(0, 65ull * NSEC_PER_SEC)) == 0) {
+      if (dq->dq_items_tail == (struct dispatch_object_s *)0xf6ee)
+        return NULL; 
+		  _dispatch_worker_sthread4(dq);
+    }
+  }
+
+	//_dispatch_thread_setspecific(dispatch_queue_key, NULL);
+
+	//_dispatch_force_cache_cleanup();
+
+	return NULL;
+}
+
+DISPATCH_EXPORT DISPATCH_NOTHROW
+dispatch_queue_t
+dispatch_sthread_queue_create(const char *label,
+                              dispatch_sthread_queue_attr_t attr,
+                              dispatch_sthread_closure_t *closure)
+{
+	int r;
+  //pthread_t pthr;
+  dispatch_queue_t dq;
+  dispatch_semaphore_t sem;
+  dispatch_sthread_queue_t s_dq;
+	struct dispatch_sthread_queue_context_s *qc;
+	size_t label_len;
+  //static struct dispatch_sthread_closure_s closure_data;
+
+	if (!label) {
+		label = "";
+	}
+	label_len = strlen(label);
+	if (label_len < (DISPATCH_QUEUE_MIN_LABEL_SIZE - 1)) {
+		label_len = (DISPATCH_QUEUE_MIN_LABEL_SIZE - 1);
+	}
+
+	s_dq = calloc(1, sizeof(struct dispatch_sthread_queue_s));
+  dq = s_dq->dq = (dispatch_queue_t)_dispatch_alloc(DISPATCH_VTABLE(queue), sizeof(struct dispatch_queue_s));
+  //_dispatch_sthread_queue_create(s_dq, 12+_dispatch_sthread._count);
+
+  dq->do_vtable = DISPATCH_VTABLE(queue_sthread),
+  dq->do_ref_cnt = 0; //DISPATCH_OBJECT_GLOBAL_REFCNT,
+  dq->do_xref_cnt = 0; //DISPATCH_OBJECT_GLOBAL_REFCNT,
+  dq->do_next = NULL,
+  dq->do_targetq = NULL,
+  //dq->do_ctxt = &_dispatch_root_queue_contexts[
+      //DISPATCH_ROOT_QUEUE_IDX_LOW_PRIORITY],
+  dq->do_finalizer = NULL,
+  dq->do_suspend_cnt = DISPATCH_OBJECT_SUSPEND_LOCK,
+  //dq->dq_running = 2,
+  //dq->dq_width = UINT32_MAX,
+  dq->dq_items_tail = NULL,
+  dq->dq_items_head = NULL,
+  dq->dq_specific_q = NULL,
+  //snprintf(dq->dq_label, sizeof(dq->dq_label)-1, "RW-STATIC-THREAD-QUEUE-%03lu", dq_serialnum);
+  _dispatch_queue_init(dq);
+	strcpy(dq->dq_label, label);
+  dq->do_targetq = NULL;
+
+  dq->do_ctxt = calloc(1, sizeof(struct dispatch_sthread_queue_context_s)); // FIXME: THIS LEAKS
+  qc = dq->do_ctxt;
+  sem = qc->dgq_sthread_mediator = (dispatch_semaphore_t)&qc->dgq_sthread_mediator_data;
+  sem->do_vtable = DISPATCH_VTABLE(semaphore);
+  sem->do_ref_cnt = DISPATCH_OBJECT_GLOBAL_REFCNT;
+  sem->do_xref_cnt = DISPATCH_OBJECT_GLOBAL_REFCNT;
+  r = sem_init(&sem->dsema_sem, 0, 0);
+  (void)dispatch_assume_zero(r);
+
+
+  if (attr == DISPATCH_STHREAD_WO_SERVICING) {
+    if (closure == NULL) {
+      return NULL;
+    }
+    //*closure = &closure_data;
+    *closure = calloc(1, sizeof(struct dispatch_sthread_closure_s));
+    (*closure)->fn= (void (*)(void *))_dispatch_worker_sthread4;
+    (*closure)->ud = (void*)dq;
+  } else {
+    while ((r = pthread_create(&s_dq->pthr, NULL, _dispatch_worker_sthread, dq))) {
+      if (r != EAGAIN) {
+        (void)dispatch_assume_zero(r);
+      }
+      sleep(1);
+    }
+    r = pthread_detach(s_dq->pthr);
+    (void)dispatch_assume_zero(r);
+    dispatch_queue_set_specific(s_dq->dq, "STHREAD_PTHR", &s_dq->pthr, NULL);
+  }
+
+  STHREAD_LOCK()
+  dq->dq_serialnum = 12+_dispatch_sthread._count;
+  TAILQ_INSERT_TAIL(&_dispatch_sthread._tq, s_dq, entry);
+  //_dispatch_sthread._count ++;
+  dispatch_atomic_inc2o(&_dispatch_sthread, _count);
+  STHREAD_UNLOCK()
+
+  return dq;
+}
+
+DISPATCH_EXPORT DISPATCH_NOTHROW
+dispatch_queue_t
+dispatch_sthread_get_queue(unsigned int sthread_id)
+{
+  if (sthread_id > _dispatch_sthread._count-1)
+    return NULL;
+
+  STHREAD_LOCK()
+  dispatch_sthread_queue_t _s_dq;
+  unsigned int count = 0;
+  TAILQ_FOREACH(_s_dq, &_dispatch_sthread._tq, entry) {
+    if (count == sthread_id) return _s_dq->dq;
+    count++;
+  }
+  STHREAD_UNLOCK()
+  return NULL;
+}
+
+struct _dispatch_sthread_setaffinity_s_ {
+  int rc;
+  size_t cpusetsize;
+  cpu_set_t *cpusetp;
+};
+
+DISPATCH_EXPORT DISPATCH_NOTHROW
+int
+dispatch_sthread_setaffinity(dispatch_queue_t queue,
+                             size_t cpusetsize,
+                             cpu_set_t *cpusetp)
+{
+  struct _dispatch_sthread_setaffinity_s_ ctxt = { -1, cpusetsize, cpusetp};
+  struct _dispatch_sthread_setaffinity_s_ *ctxtp = & ctxt;
+  dispatch_sync(queue, ^{
+                          //printf("thread=%lu\n", pthread_self());
+                          ctxtp->rc = pthread_setaffinity_np(pthread_self(),
+                                                             ctxtp->cpusetsize,
+                                                             ctxtp->cpusetp);
+                          }
+                );
+  return ctxtp->rc;
+}
+
+DISPATCH_EXPORT DISPATCH_NOTHROW
+int
+dispatch_sthread_getaffinity(dispatch_queue_t queue,
+                             size_t cpusetsize,
+                             cpu_set_t *cpusetp)
+{
+  struct _dispatch_sthread_setaffinity_s_ ctxt = { -1, cpusetsize, cpusetp};
+  struct _dispatch_sthread_setaffinity_s_ *ctxtp = & ctxt;
+  dispatch_sync(queue, ^{
+                          //printf("thread=%lu\n", pthread_self());
+                          ctxtp->rc = pthread_getaffinity_np(pthread_self(),
+                                                             ctxtp->cpusetsize,
+                                                             ctxtp->cpusetp);
+                          }
+                );
+  return ctxtp->rc;
 }

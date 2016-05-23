@@ -26,6 +26,8 @@
 #include <dispatch/base.h> // for HeaderDoc
 #endif
 
+#include <pthread.h>
+
 /*!
  * @header
  *
@@ -922,6 +924,130 @@ dispatch_get_main_queue_eventfd_np();
 DISPATCH_EXPORT DISPATCH_NOTHROW
 void
 dispatch_main_queue_drain_np();
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+// DISPATCH_STHREAD IMPLEMENTATION
+////////////////////////////////////////////////////////////////////////////////
+
+struct dispatch_sthread_closure_s {
+  void (*fn)(void *ud);
+  void *ud;
+};
+typedef struct dispatch_sthread_closure_s *dispatch_sthread_closure_t;
+
+typedef enum dispatch_sthread_queue_attr_e {
+  DISPATCH_STHREAD_W_SERVICING  = 0,
+  DISPATCH_STHREAD_WO_SERVICING = 1
+} dispatch_sthread_queue_attr_t;
+
+/*!
+ * @function dispatch_sthread_queue_create
+ *
+ * @abstract
+ * Creates static-thread-pool of size n
+ *
+ * @discussion
+ * TODO
+ *
+ * @param label
+ * A string label to attach to the queue.
+ * This parameter is optional and may be NULL.
+ *
+ * @param attr
+ * Tells whether to create the sthread_queue w/ servicing (a pthread is created
+ * and serviced) OR the pthread reation and servicing is done by the caller.
+ *
+ * @param closure
+ * When called with DISPATCH_STHREAD_WO_SERVICING, the closure returns the fn &
+ * ud
+ *
+ * @result
+ * The newly created static-thread dispatch queue.
+ *
+ */
+DISPATCH_EXPORT DISPATCH_WARN_RESULT DISPATCH_NOTHROW
+dispatch_queue_t
+dispatch_sthread_queue_create(const char *label,
+                              dispatch_sthread_queue_attr_t attr,
+                              dispatch_sthread_closure_t *closure);
+
+/*!
+ * @function dispatch_sthread_get_queue
+ *
+ * @abstract
+ * Creates static-thread-pool of size n
+ *
+ * @discussion
+ * TODO
+ *
+ * @param sthread_id
+ * ID for the static-thread
+ *
+ * @result
+ * Returns the requested static-thread's  queue.
+ */
+DISPATCH_EXPORT DISPATCH_WARN_RESULT DISPATCH_NOTHROW
+dispatch_queue_t
+dispatch_sthread_get_queue(unsigned int sthread_id);
+
+
+/*!
+ * @function dispatch_sthread_setaffinity
+ *
+ * @abstract
+ * Creates static-thread-pool of size n
+ *
+ * @discussion
+ * TODO
+ *
+ * @param cpusetsize
+ * The argument cpusetsize is the length (in bytes) of the buffer pointed to by
+ * cpuset.
+ *
+ * @param cpuset
+ * The cpuset data structure represents a set of CPUs;
+ * See http://linux.die.net/man/7/cpuset
+ *
+ * @result
+ * On success, these functions return 0; on error, they return a nonzero error
+ * number. See http://linux.die.net/man/3/pthread_setaffinity_np
+ */
+__OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
+DISPATCH_EXPORT DISPATCH_PURE DISPATCH_WARN_RESULT DISPATCH_NOTHROW
+int
+dispatch_sthread_setaffinity(dispatch_queue_t queue,
+                             size_t cpusetsize,
+                             cpu_set_t *cpuset);
+
+/*!
+ * @function dispatch_sthread_getaffinity
+ *
+ * @abstract
+ * Creates static-thread-pool of size n
+ *
+ * @discussion
+ * TODO
+ *
+ * @param cpusetsize
+ * The argument cpusetsize is the length (in bytes) of the buffer pointed to by
+ * cpuset.
+ *
+ * @param cpuset
+ * The cpuset data structure represents a set of CPUs;
+ * See http://linux.die.net/man/7/cpuset
+ *
+ * @result
+ * On success, these functions return 0; on error, they return a nonzero error
+ * number. See http://linux.die.net/man/3/pthread_setaffinity_np
+ */
+__OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
+DISPATCH_EXPORT DISPATCH_PURE DISPATCH_WARN_RESULT DISPATCH_NOTHROW
+int
+dispatch_sthread_getaffinity(dispatch_queue_t queue,
+                             size_t cpusetsize,
+                             cpu_set_t *cpuset);
 #endif
 
 __END_DECLS

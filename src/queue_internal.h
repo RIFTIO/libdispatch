@@ -102,6 +102,7 @@ struct dispatch_queue_s {
 };
 
 DISPATCH_INTERNAL_SUBCLASS_DECL(queue_root, queue);
+DISPATCH_INTERNAL_SUBCLASS_DECL(queue_sthread, queue);
 DISPATCH_INTERNAL_SUBCLASS_DECL(queue_mgr, queue);
 
 DISPATCH_DECL_INTERNAL_SUBCLASS(dispatch_queue_specific_queue, dispatch_queue);
@@ -119,6 +120,8 @@ dispatch_queue_t _dispatch_wakeup(dispatch_object_t dou);
 void _dispatch_queue_specific_queue_dispose(dispatch_queue_specific_queue_t
 		dqsq);
 bool _dispatch_queue_probe_root(dispatch_queue_t dq);
+bool _dispatch_queue_probe_sthread(dispatch_queue_t dq);
+void _dispatch_queue_dispose_sthread(dispatch_queue_t dq);
 bool _dispatch_mgr_wakeup(dispatch_queue_t dq);
 DISPATCH_NORETURN
 dispatch_queue_t _dispatch_mgr_thread(dispatch_queue_t dq);
@@ -250,6 +253,23 @@ _dispatch_queue_init(dispatch_queue_t dq)
 	dq->dq_serialnum = dispatch_atomic_inc(&_dispatch_queue_serial_numbers) - 1;
 }
 
+#if 0
+#define __DISPATCH_CATCH_CORRUPTION(dc) \
+  if (  dc->do_vtable == DISPATCH_VTABLE(source)        \
+     || dc->do_vtable == DISPATCH_VTABLE(queue) ||      \
+     || dc->do_vtable == DISPATCH_VTABLE(semaphore) ||  \
+     || dc->do_vtable == DISPATCH_VTABLE(io) ||         \
+     || dc->do_vtable == DISPATCH_VTABLE(data) ||       \
+     || dc->do_vtable == DISPATCH_VTABLE(disk)          \
+     ) {                                                \
+    _dispatch_abort(__LINE__, (long)1);                 \
+  }
+#else
+#define __DISPATCH_CATCH_CORRUPTION(dc) \
+    if (DISPATCH_OBJ_IS_VTABLE(dc)) \
+      _dispatch_abort(__LINE__, (long)1)
+#endif
+
 dispatch_continuation_t
 _dispatch_continuation_alloc_from_heap(void);
 
@@ -261,6 +281,7 @@ _dispatch_continuation_alloc_cacheonly(void)
 	dc = fastpath((dispatch_continuation_t)
 	              _dispatch_thread_getspecific(dispatch_cache_key));
 	if (dc) {
+    __DISPATCH_CATCH_CORRUPTION(dc);
 		_dispatch_thread_setspecific(dispatch_cache_key, dc->do_next);
 	}
 	return dc;
@@ -285,6 +306,9 @@ static inline void
 _dispatch_continuation_free(dispatch_continuation_t dc)
 {
 	dispatch_continuation_t prev_dc;
+
+  __DISPATCH_CATCH_CORRUPTION(dc);
+
 	prev_dc = (dispatch_continuation_t)
 			_dispatch_thread_getspecific(dispatch_cache_key);
 	dc->do_next = prev_dc;

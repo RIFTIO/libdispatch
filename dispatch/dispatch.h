@@ -30,7 +30,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdarg.h>
+/* __block is a built in clang. This is a hack for older glibc */
+#undef __block
+#define __block __foo_block
 #include <unistd.h>
+#undef __block
+#define __block __attribute__((__blocks__(byref)))
 #include <fcntl.h>
 
 #ifndef __OSX_AVAILABLE_STARTING

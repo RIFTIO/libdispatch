@@ -148,6 +148,7 @@ struct dispatch_queue_s _dispatch_main_q = {
 	.dq_label = {'c','o','m','.','a','p','p','l','e','.','m','a','i','n','-','t','h','r','e','a','d','\0'},
 };
 
+
 struct dispatch_queue_attr_s _dispatch_queue_attr_concurrent = {
 	.do_vtable = DISPATCH_VTABLE(queue_attr),
 	.do_ref_cnt = DISPATCH_OBJECT_GLOBAL_REFCNT,
@@ -192,6 +193,15 @@ DISPATCH_VTABLE_SUBCLASS_INSTANCE(queue_root, queue,
 	.do_invoke = NULL,
 	.do_probe = _dispatch_queue_probe_root,
 	.do_dispose = NULL,
+);
+
+DISPATCH_VTABLE_SUBCLASS_INSTANCE(queue_sthread, queue,
+	.do_type = DISPATCH_QUEUE_STHREAD_TYPE,
+	.do_kind = "sthread-queue",
+	.do_debug = DEBUG_FUNCTION(queue, dispatch_queue_debug),
+	.do_invoke = NULL,
+	.do_probe = _dispatch_queue_probe_sthread,
+	.do_dispose = DISPOSE_FUNCTION(queue, _dispatch_queue_dispose_sthread),
 );
 
 DISPATCH_VTABLE_SUBCLASS_INSTANCE(queue_mgr, queue,
