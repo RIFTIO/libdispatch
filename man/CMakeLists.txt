@@ -18,5 +18,5 @@ set (man_pages
   dispatch_time.3
 )
 
-install(FILES ${man_pages} DESTINATION "share/man/man3")
+install(FILES ${man_pages} DESTINATION "${CMAKE_INSTALL_MANDIR}/man3")
 install(SCRIPT "create_man_symlinks.cmake")

@@ -5,6 +5,7 @@ set (dispatch_VERSION "1.2")
 
 list (APPEND CMAKE_MODULE_PATH "${dispatch_SOURCE_DIR}/cmake")
 
+include (GNUInstallDirs)
 include (CheckCCompilerFlag)
 include (CheckCSourceCompiles)
 include (CMakePushCheckState)
@@ -25,7 +26,7 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
   add_definitions(-D_GNU_SOURCE)
 endif ()
 
-set (DISPATCH_INCLUDE_DIR "include/dispatch" CACHE STRING
+set (DISPATCH_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}/dispatch" CACHE STRING
   "Appended to CMAKE_INSTALL_PREFIX to determine where the headers are installed.")
 
 ################################################################################

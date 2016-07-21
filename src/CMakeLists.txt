@@ -125,6 +125,6 @@ set_target_properties(libdispatch_shared PROPERTIES
 
 install(
   TARGETS libdispatch_shared libdispatch_static
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
