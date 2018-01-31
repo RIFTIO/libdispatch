@@ -339,6 +339,16 @@ _dispatch_bug(size_t line, long val)
 }
 
 void
+_dispatch_kevent_bug(const char *msg, struct kevent *evt)
+{
+  _dispatch_bug_log("%s ident=%d, filter=0x%x, flags:0x%x, fflags:0x%x, data=0x%lx, udata=%p",
+                    msg,  (int)evt->ident,
+                    (int) evt->filter, (int) evt->flags,
+                    (int) evt->fflags, 
+                    (long) evt->data, evt->udata);
+}
+
+void
 _dispatch_bug_client(const char* msg)
 {
 	_dispatch_bug_log("BUG in libdispatch client: %s", msg);

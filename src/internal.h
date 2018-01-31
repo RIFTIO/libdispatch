@@ -220,6 +220,9 @@
 DISPATCH_NOINLINE
 void _dispatch_bug(size_t line, long val);
 DISPATCH_NOINLINE
+void
+_dispatch_kevent_bug(const char *msg, struct kevent *evt);
+DISPATCH_NOINLINE
 void _dispatch_bug_client(const char* msg);
 #if HAVE_MACH
 DISPATCH_NOINLINE

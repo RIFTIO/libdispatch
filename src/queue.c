@@ -2898,6 +2898,8 @@ _dispatch_update_kq(const struct kevent *kev)
 {
 	int rval;
 	struct kevent kev_copy = *kev;
+        struct kevent add_copy = *kev;
+        
 	// This ensures we don't get a pending kevent back while registering
 	// a new kevent
 	kev_copy.flags |= EV_RECEIPT;
@@ -2958,7 +2960,7 @@ retry:
 	// Only executed on manager queue
 	switch (kev_copy.data) {
 	case 0:
-		return 0;
+          return 0;
 	case EBADF:
 		break;
 	default:
@@ -2978,9 +2980,12 @@ retry:
 				_dispatch_debug("select workaround used to read fd %d: 0x%lx",
 						(int)kev_copy.ident, (long)kev_copy.data);
 				return 0;
-			}
+			}else{
+                          _dispatch_kevent_bug("Kevent READ not added to select, change event", &add_copy);
+                          _dispatch_kevent_bug("Kevent READ not added to select, triggered event", &kev_copy);
+                        }
 			break;
-		case EVFILT_WRITE:
+                  case EVFILT_WRITE:
 			if (dispatch_assume(kev_copy.ident < FD_SETSIZE)) {
 				if (!_dispatch_wfd_ptrs) {
 					_dispatch_wfd_ptrs = (void **)calloc(FD_SETSIZE, sizeof(void*));
@@ -2991,16 +2996,19 @@ retry:
 				_dispatch_debug("select workaround used to write fd %d: 0x%lx",
 						(int)kev_copy.ident, (long)kev_copy.data);
 				return 0;
-			}
+			}else{
+                          _dispatch_kevent_bug("Kevent WRITE not added to select, change event", &add_copy);
+                          _dispatch_kevent_bug("Kevent WRITE not added to select, triggered event", &kev_copy);
+                        }
 			break;
 		default:
-			// kevent error, _dispatch_source_merge_kevent() will handle it
-			_dispatch_source_drain_kevent(&kev_copy);
-			break;
+                  // kevent error, _dispatch_source_merge_kevent() will handle it
+                  _dispatch_source_drain_kevent(&kev_copy);
+                  break;
 		}
 		break;
 	}
-	return kev_copy.data;
+        return kev_copy.data;
 }
 
 bool
