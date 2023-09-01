@@ -50,7 +50,7 @@
 // FIXME
 #ifdef __BLOCKS__
 #define WITH_DISPATCH_IO 1
-#else 
+#else
 #define WITH_DISPATCH_IO 0
 #endif
 
@@ -156,7 +156,9 @@
 #include <sys/event.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#if !defined(__linux__)
 #include <sys/sysctl.h>
+#endif
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
