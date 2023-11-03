@@ -85,6 +85,8 @@
 #define __has_attribute(x) 0
 #endif
 
+#include <sys/sysmacros.h>
+
 #include <dispatch/dispatch.h>
 #include <dispatch/base.h>
 
