@@ -1560,7 +1560,7 @@ _dispatch_barrier_sync_f_pop(dispatch_queue_t dq, dispatch_object_t dou,
 		// returns
 		(void)dispatch_atomic_add2o(dbss2->dbss2_dq, dq_running, 2);
 	}
-	return dbss2->dbss2_sema ? dbss2->dbss2_sema : 
+	return dbss2->dbss2_sema ? dbss2->dbss2_sema :
 #if HAVE_MACH
         MACH_PORT_DEAD;
 #else
@@ -2453,7 +2453,7 @@ _dispatch_queue_drain_one_barrier_sync(dispatch_queue_t dq)
 static struct dispatch_object_s *
 _dispatch_queue_concurrent_drain_one(dispatch_queue_t dq)
 {
-	struct dispatch_object_s *head, *next, *const mediator = 
+	struct dispatch_object_s *head, *next, *const mediator =
 			(struct dispatch_object_s *)~0ul;
 
 start:
@@ -2571,7 +2571,7 @@ static void
 _dispatch_worker_thread3(void *context)
 {
 	dispatch_queue_t dq = (dispatch_queue_t)context;
-	struct dispatch_root_queue_context_s *qc = 
+	struct dispatch_root_queue_context_s *qc =
 			(struct dispatch_root_queue_context_s *)dq->do_ctxt;
 
 	(void)dispatch_atomic_dec2o(qc, dgq_pending);
@@ -2899,7 +2899,7 @@ _dispatch_update_kq(const struct kevent *kev)
 	int rval;
 	struct kevent kev_copy = *kev;
         struct kevent add_copy = *kev;
-        
+
 	// This ensures we don't get a pending kevent back while registering
 	// a new kevent
 	kev_copy.flags |= EV_RECEIPT;
@@ -2985,7 +2985,7 @@ retry:
                           _dispatch_kevent_bug("Kevent READ not added to select, triggered event", &kev_copy);
                         }
 			break;
-                  case EVFILT_WRITE:
+		case EVFILT_WRITE:
 			if (dispatch_assume(kev_copy.ident < FD_SETSIZE)) {
 				if (!_dispatch_wfd_ptrs) {
 					_dispatch_wfd_ptrs = (void **)calloc(FD_SETSIZE, sizeof(void*));
@@ -3102,7 +3102,9 @@ _dispatch_mgr_invoke(void)
 						(timeoutp->tv_nsec / 1000u);
 				sel_timeoutp = &sel_timeout;
 			} else {
-				sel_timeoutp = NULL;
+				sel_timeout.tv_sec = 0;
+				sel_timeout.tv_usec = 100 * 1000;
+				sel_timeoutp = &sel_timeout;
 			}
 
 			r = select(FD_SETSIZE, &tmp_rfds, &tmp_wfds, NULL, sel_timeoutp);
@@ -3392,7 +3394,7 @@ _dispatch_worker_sthread(void *context)
 
 //	_dispatch_thread_setspecific(dispatch_queue_key, dq);
 
-  printf("_dispatch_worker_sthread(%lu) thread %lu\n\n",dq->dq_serialnum-12, pthread_self()); 
+  printf("_dispatch_worker_sthread(%lu) thread %lu\n\n",dq->dq_serialnum-12, pthread_self());
 
 	// workaround tweaks the kernel workqueue does for us
 	r = sigfillset(&mask);
@@ -3405,7 +3407,7 @@ _dispatch_worker_sthread(void *context)
 	  while (dispatch_semaphore_wait(qc->dgq_sthread_mediator,
               dispatch_time(0, 65ull * NSEC_PER_SEC)) == 0) {
       if (dq->dq_items_tail == (struct dispatch_object_s *)0xf6ee)
-        return NULL; 
+        return NULL;
 		  _dispatch_worker_sthread4(dq);
     }
   }
