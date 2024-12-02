@@ -3101,9 +3101,14 @@ _dispatch_mgr_invoke(void)
 				sel_timeout.tv_usec = (typeof(sel_timeout.tv_usec))
 						(timeoutp->tv_nsec / 1000u);
 				sel_timeoutp = &sel_timeout;
-			} else {
+			}
+
+			// DZS Fix: irrespective of the last timer wait for a shorter timeout,
+			// so that other events-src addition during this wait time are not kept
+			// waiting for long
+			{
 				sel_timeout.tv_sec = 0;
-				sel_timeout.tv_usec = 100 * 1000;
+				sel_timeout.tv_usec = 10 * 1000;
 				sel_timeoutp = &sel_timeout;
 			}
 
